@@ -37,7 +37,7 @@ OUTPUT_FILE = 'OUTPUT_FILE.txt'
 def kinematics(pos, vel, acc):
     #pos_vec = 
     pass
-
+# 
 def average_reads(position_list, cur_time):
     if (len(position_list)):
         tot = len(position_list)
