@@ -18,7 +18,7 @@ from filterpy.kalman import IMMEstimator
 # list of tracked points
 greenLower = (24, 45, 67)
 greenUpper = (93, 255,255)
-#
+
 buffer = 64
 pts = deque(maxlen= buffer)
 pos_buf = deque(maxlen= buffer)
