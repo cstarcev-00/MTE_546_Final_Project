@@ -1,12 +1,17 @@
 #!/usr/bin/env python
 from freenect import sync_get_depth as get_depth, sync_get_video as get_video
-import freenect 
 import cv2  
 import numpy as np
 import imutils
 from collections import deque
 import math
 from calibkinect import depth2xyzuv, xyz_matrix
+import time
+from filterpy.kalman import KalmanFilter
+from filterpy.common import Q_discrete_white_noise
+from filterpy.common import kinematic_kf
+from filterpy.kalman import IMMEstimator
+
 
 # define the lower and upper boundaries of the "green"
 # ball in the HSV color space, then initialize the
@@ -16,18 +21,77 @@ greenUpper = (93, 255,255)
 
 buffer = 64
 pts = deque(maxlen= buffer)
-depth_data = deque(maxlen= buffer)
+pos_buf = deque(maxlen= buffer)
+vel_buf = deque(maxlen= buffer)
+acc_buf = deque(maxlen= buffer)
+time_buf = deque(maxlen= buffer)
 
-def kalman_filter():
+GRAVITY = 9.81
+PIXEL_OFFSET = 2
+OUTPUT = 30
+
+RECORD_TIME = 5
+
+OUTPUT_FILE = 'OUTPUT_FILE.txt'
+
+def kinematics(pos, vel, acc):
+    #pos_vec = 
     pass
 
+def average_reads(position_list, cur_time):
+    if (len(position_list)):
+        tot = len(position_list)
+        x = 0
+        y = 0
+        z = 0
+        num_invalid = 0
 
-def doloop():
+        for xyz in position_list:
+            x += xyz[0]
+            y += xyz[1]
+            if (xyz[2] < 0):
+                z += xyz[2]
+            else:
+                num_invalid +=1
+        if num_invalid == tot:
+            return([cur_time, x/tot, y/tot, 0])
+        else:
+            return([cur_time, x/tot, y/tot, z/(tot-num_invalid)])
+    else:
+        return([cur_time, 0, 0, 0])
+    
+def max_min_reads(position_list):
+    max_x = max(position_list[:][0])
+    min_x = min(position_list[:][0])
+
+    max_y = max(position_list[:][1])
+    min_y = min(position_list[:][1])
+
+    max_z = max(position_list[:][2])
+    min_z = min(position_list[:][2])
+
+    return([[min_x, max_x], [min_y, max_y], [min_z, max_z]])
+
+def get_single_point_xyz(u, v, z, cur_time):
+    C = np.vstack((u, v, z, 0*u+1))
+    X,Y,Z,W = np.dot(xyz_matrix(),C)
+    X,Y,Z = X/W, Y/W, Z/W
+
+    return ([cur_time, X,Y,Z])
+
+def doloop(file):
     first = True
+    RECORDING = False
+    recording_time = 0
+    #output data every 30 frames, too sparatic to figure out whats going on otherwise
+    counter = 0
     global depth, rgb
     while True:
         # Get a fresh frame
         (depth,_), (rgb,_) = get_depth(), get_video()
+        
+        #get timestamp
+        cur_time = time.time_ns()
 
         #color tracking
         # resize the frame, blur it, and convert it to the HSV
@@ -68,20 +132,66 @@ def doloop():
                 # then update the list of tracked points
                 center = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
 
-                offset = 2
-
-                #u, v = np.mgrid[int(round(x)-offset):int(round(x)+offset), int(round(y)-offset):int(round(y)+offset)]
                 u = round(x)
                 v = round(y)
+                #if ball center is inside image
+                if (0 <= u and u < 480) and (0 <= v and v < 640):
+                    counter += 1
+                    #get real world position data from grid of pixels
+                    u_,v_ = np.mgrid[u-PIXEL_OFFSET:u+PIXEL_OFFSET,v-PIXEL_OFFSET:v+PIXEL_OFFSET]
+                    xyz,uv = depth2xyzuv(depth[u_,v_], u_, v_)
+                    avrg_xyz = average_reads(xyz, cur_time)
 
-                if (0 <= round(x) and round(x) <= 480) and (0 <= round(y) and round(y) <= 640):
-                    #pos, _uv = depth2xyzuv(depth[v, u], u, v)
-                    C = np.vstack((u, v, depth[u][v], 0*u+1))
-                    X,Y,Z,W = np.dot(xyz_matrix(),C)
-                    X,Y,Z = X/W, Y/W, Z/W
-                    depth_data.appendleft([X,Y,Z])
-                    print("Image position values: (x: {}, y: {}, depth: {})".format(x, y, depth[round(x)][round(y)]))
-                    print("Real world: (x: {}, y: {}, z: {})".format( X, Y, Z))
+                    #get single point real world position data(center point) 
+                    point = get_single_point_xyz(u, v, depth[u][v], cur_time)
+
+                    
+                    pos_buf.appendleft(avrg_xyz)
+
+                    if (len(pos_buf) > 1 and len(pos_buf[1])):
+                        #print('time0: {}, time1: {}'.format(pos_buf[0][0], pos_buf[1][0]))
+                        x_vel = ((pos_buf[0][1] - pos_buf[1][1])/(pos_buf[0][0] - pos_buf[1][0]))*1e9
+                        y_vel = ((pos_buf[0][2] - pos_buf[1][2])/(pos_buf[0][0] - pos_buf[1][0]))*1e9
+                        z_vel = ((pos_buf[0][3] - pos_buf[1][3])/(pos_buf[0][0] - pos_buf[1][0]))*1e9
+                        vel_buf.appendleft([x_vel, y_vel, z_vel])
+                    else:
+                        vel_buf.appendleft(None)
+
+                    if(len(vel_buf) > 1 and vel_buf[1]):
+                        x_acc =  ((vel_buf[0][0] - vel_buf[1][0])/(pos_buf[0][0] - pos_buf[2][0]))*1e9
+                        y_acc =  ((vel_buf[0][1] - vel_buf[1][1])/(pos_buf[0][0] - pos_buf[2][0]))*1e9
+                        z_acc =  ((vel_buf[0][2] - vel_buf[1][2])/(pos_buf[0][0] - pos_buf[2][0]))*1e9
+                        acc_buf.appendleft([x_acc, y_acc, z_acc])
+                    else:
+                        acc_buf.appendleft(None)
+                    
+                    #Save data if s is hit
+                    if (RECORDING):
+                        data_out = pos_buf[0] + vel_buf[0] + acc_buf[0]
+                        out_str = ''
+                        for i in data_out:
+                            out_str += str(i) + ', '
+                        out_str += '\n'
+                        file.write(out_str)
+
+                    if (time.time() - recording_time  > RECORD_TIME and RECORDING):
+                        print("DONE RECORDING")
+                        RECORDING = False
+                        recording_time = 0
+                    
+                    #ouput data after certain amount of frames
+                    if (counter >= OUTPUT):
+                        print("\n")
+                        #print("Image position values: (x: {}, y: {}, depth: {})".format(x, y, depth[u][v]))
+                        #print("Real world single point: (x: {}, y: {}, z: {})".format( point[0], point[1], point[2]))
+                        print("Average read data, X: {}, y: {}, Z: {}".format(avrg_xyz[1], avrg_xyz[2], avrg_xyz[3]))
+                        if (len(vel_buf)):
+                            print('Velocity data, x: {}, y: {}, z: {}'.format(vel_buf[0][0], vel_buf[0][1], vel_buf[0][2]))
+                        if (len(acc_buf)):
+                            print('Acceleration data, x: {}, y: {}, z: {}'.format(acc_buf[0][0], acc_buf[0][1], acc_buf[0][2]))
+                        counter = 0
+                
+                #draw the circle and center
                 cv2.circle(frame, (int(x), int(y)), int(radius),(0, 255, 255), 2)
                 cv2.circle(frame, center, 5, (0, 0, 255), -1)
 
@@ -100,8 +210,7 @@ def doloop():
             # draw the connecting lines
             thickness = int(np.sqrt(buffer / float(i + 1)) * 2.5)
             cv2.line(frame, pts[i - 1], pts[i], (0, 0, 255), thickness)
-            # show the frame to our screen
-            #cv2.imshow("Frame", frame)
+            
 
         mask_3_channel = cv2.cvtColor(mask,cv2.COLOR_GRAY2RGB)
 
@@ -110,7 +219,6 @@ def doloop():
         da = np.hstack((d3,frame, mask_3_channel))
         
         if (first):
-            print(depth)
             print(frame.shape)
             print(mask_3_channel.shape)
             first = False
@@ -123,9 +231,15 @@ def doloop():
         key = cv2.waitKey(5) & 0xFF
         # if the 'q' key is pressed, stop the loop
         if key == ord("q"):
+            file.close()
             break
+        #save data
+        if key == ord("s"):
+            print("RECORDING DATA")
+            RECORDING = True
+            recording_time = time.time()
 
 
 if __name__ == '__main__':
-    
-    doloop()
+    file = open(OUTPUT_FILE, "w")
+    doloop(file)

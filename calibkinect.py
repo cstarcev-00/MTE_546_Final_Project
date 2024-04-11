@@ -107,8 +107,8 @@ def xyz_matrix():
   b = 3.3309495
   cx = 339.5
   cy = 242.7
-  mat = np.array([[1/fx, 0, 0, -cx/fx],
-                  [0, -1/fy, 0, cy/fy],
-                  [0,   0, 0,    -1],
-                  [0,   0, a,     b]])
+  mat = np.array([[1/fx,  0, 0, -cx/fx],
+                  [0, -1/fy, 0,  cy/fy],
+                  [0,     0, 0,     -1],
+                  [0,     0, a,      b]])
   return mat
