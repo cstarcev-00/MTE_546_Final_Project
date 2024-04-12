@@ -30,9 +30,9 @@ GRAVITY = 9.81
 PIXEL_OFFSET = 2
 OUTPUT = 30
 
-RECORD_TIME = 5
+RECORD_TIME = 10
 
-OUTPUT_FILE = 'OUTPUT_FILE.txt'
+OUTPUT_FILE = 'OUTPUT_FILE.csv'
 
 def kinematics(pos, vel, acc):
     #pos_vec = 
@@ -82,8 +82,32 @@ def get_single_point_xyz(u, v, z, cur_time):
 
     Z = 0.1236 * math.tan(z / 2842.5 + 1.1863)
 
-    X = (v - 640 / 2) * (z + minDistance) * scaleFactor
-    Y = (u - 480 / 2) * (z + minDistance) * scaleFactor
+    X = (v - 640 / 2) * (z + minDistance) * scaleFactor /1000.0
+    Y = -(u - 480 / 2) * (z + minDistance) * scaleFactor / 1000.0
+
+    return ([cur_time, X,Y,Z])
+
+def get_avrg_dist_xyz(u, v, depths, cur_time):
+    reads = depths.flatten()
+    tot = 0
+    cnt = 0
+    for read in reads:
+        if read != 2047 or read != 0:
+            tot += read
+            cnt += 1
+
+    if cnt == 0:
+        return ([cur_time, 0,0,0])
+    
+    avrg_read = tot/cnt
+
+    minDistance = -10
+    scaleFactor = .0021
+
+    Z = 0.1236 * math.tan(avrg_read / 2842.5 + 1.1863)
+
+    X = (v - 640 / 2) * (avrg_read + minDistance) * scaleFactor /1000.0
+    Y = -(u - 480 / 2) * (avrg_read + minDistance) * scaleFactor / 1000.0
 
     return ([cur_time, X,Y,Z])
 
@@ -146,15 +170,16 @@ def doloop(file):
                 if (0 <= u and u < 480) and (0 <= v and v < 640):
                     counter += 1
                     #get real world position data from grid of pixels
-                    rad = round(radius)
-                    u_,v_ = np.mgrid[u-rad if u-rad > 0 else 0:u+rad if u+rad < 480 else 479,v-rad if v-rad>0 else 0:v+rad if v+rad< 640 else 639]
+                    sqr = round(radius/math.sqrt(2))
+                    u_,v_ = np.mgrid[u-sqr if u-sqr > 0 else 0:u+sqr if u+sqr < 480 else 479,v-sqr if v-sqr>0 else 0:v+sqr if v+sqr< 640 else 639]
                     xyz,uv = depth2xyzuv(depth[u_,v_], u_, v_)
                     avrg_xyz = average_reads(xyz, cur_time)
 
                     #get single point real world position data(center point) 
                     point = get_single_point_xyz(u, v, depth[u][v], cur_time)
 
-                    
+                    diff_xyz = get_avrg_dist_xyz(u, v, depth[u_,v_], cur_time)
+
                     pos_buf.appendleft(avrg_xyz)
 
                     if (len(pos_buf) > 1 and len(pos_buf[1])):
@@ -176,11 +201,19 @@ def doloop(file):
                     
                     #Save data if s is hit
                     if (RECORDING):
-                        data_out = pos_buf[0] + vel_buf[0] + acc_buf[0]
+                        #data_out = pos_buf[0] + vel_buf[0] + acc_buf[0]
+                        output_data = "time_ns, x_cnt_px, y_cnt_px, rad, cnt_depth, depth_array, x_cnvrt, y_cnvrt, z_cnvrt\n"
+                        #print(depth[u_, v_].shape)
+                        #print("test - ", ','.join(depth[u-5:u+5, v-5:v+5].flatten()))
+                        depth_list = depth[u-5:u+5, v-5:v+5].flatten()
+                        raw_data = [cur_time, v, u, radius, depth[u, v], ','.join(map(str, depth_list)) ]
+                        converted = [point[1], point[2], avrg_xyz[3]]
+                        data_out = raw_data + converted
                         out_str = ''
                         for i in data_out:
                             out_str += str(i) + ', '
                         out_str += '\n'
+                        #file.write(output_data)
                         file.write(out_str)
 
                     if (time.time() - recording_time  > RECORD_TIME and RECORDING):
@@ -192,12 +225,13 @@ def doloop(file):
                     if (counter >= OUTPUT):
                         print("\n")
                         #print("Image position values: (x: {}, y: {}, depth: {})".format(x, y, depth[u][v]))
-                        print("Real world single point: (x: {}, y: {}, z: {})".format( point[1], point[2], point[3]))
-                        print("Average read data, X: {}, y: {}, Z: {}, depth read: {}".format(avrg_xyz[1], avrg_xyz[2], avrg_xyz[3], depth[u,v]))
-                        if (len(vel_buf)):
-                            print('Velocity data, x: {}, y: {}, z: {}'.format(vel_buf[0][0], vel_buf[0][1], vel_buf[0][2]))
-                        if (len(acc_buf)):
-                            print('Acceleration data, x: {}, y: {}, z: {}'.format(acc_buf[0][0], acc_buf[0][1], acc_buf[0][2]))
+                        print("Real world single point:  x: {}, y: {}, z: {}".format( point[1], point[2], point[3]))
+                        print("Average read data matrix, X: {}, y: {}, Z: {}, depth read: {}".format(avrg_xyz[1], avrg_xyz[2], avrg_xyz[3], depth[u,v]))
+                        print("Average read data calcm   x: {}, y: {}, z: {}".format(diff_xyz[1], diff_xyz[2], diff_xyz[3], depth[u,v]))
+                        #if (len(vel_buf)):
+                            #print('Velocity data, x: {}, y: {}, z: {}'.format(vel_buf[0][0], vel_buf[0][1], vel_buf[0][2]))
+                        #if (len(acc_buf)):
+                            #print('Acceleration data, x: {}, y: {}, z: {}'.format(acc_buf[0][0], acc_buf[0][1], acc_buf[0][2]))
                         counter = 0
                 
                 #draw the circle and center
@@ -210,7 +244,7 @@ def doloop(file):
         #update depth data of ball
 
         '''
-        # loop over the set of tracked points
+        # loop over the set of tracked points and display
         for i in range(1, len(pts)):
             # if either of the tracked points are None, ignore
             # them
@@ -221,8 +255,12 @@ def doloop(file):
             thickness = int(np.sqrt(buffer / float(i + 1)) * 2.5)
             cv2.line(frame, pts[i - 1], pts[i], (0, 0, 255), thickness)
         ''' 
-        cv2.circle(frame, (314, 239), 3, (255, 0, 0), -1)
+        cv2.circle(frame, (119, 239), 3, (255, 0, 0), -1)
+        cv2.circle(frame, (219, 239), 3, (255, 0, 0), -1)
+        #Center
         cv2.circle(frame, (319, 239), 3, (255, 0, 0), -1)
+        cv2.circle(frame, (419, 239), 3, (255, 0, 0), -1)
+        cv2.circle(frame, (519, 239), 3, (255, 0, 0), -1)
 
         mask_3_channel = cv2.cvtColor(mask,cv2.COLOR_GRAY2RGB)
 
