@@ -73,9 +73,17 @@ def max_min_reads(position_list):
     return([[min_x, max_x], [min_y, max_y], [min_z, max_z]])
 
 def get_single_point_xyz(u, v, z, cur_time):
-    C = np.vstack((u, v, z, 0*u+1))
-    X,Y,Z,W = np.dot(xyz_matrix(),C)
-    X,Y,Z = X/W, Y/W, Z/W
+    #C = np.vstack((u, v, z, 0*u+1))
+    #X,Y,Z,W = np.dot(xyz_matrix(),C)
+    #X,Y,Z = X/W, Y/W, Z/W
+    
+    minDistance = -10
+    scaleFactor = .0021
+
+    Z = 0.1236 * math.tan(z / 2842.5 + 1.1863)
+
+    X = (v - 640 / 2) * (z + minDistance) * scaleFactor
+    Y = (u - 480 / 2) * (z + minDistance) * scaleFactor
 
     return ([cur_time, X,Y,Z])
 
@@ -132,13 +140,14 @@ def doloop(file):
                 # then update the list of tracked points
                 center = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
 
-                u = round(x)
-                v = round(y)
+                u = round(y)
+                v = round(x)
                 #if ball center is inside image
                 if (0 <= u and u < 480) and (0 <= v and v < 640):
                     counter += 1
                     #get real world position data from grid of pixels
-                    u_,v_ = np.mgrid[u-PIXEL_OFFSET:u+PIXEL_OFFSET,v-PIXEL_OFFSET:v+PIXEL_OFFSET]
+                    rad = round(radius)
+                    u_,v_ = np.mgrid[u-rad if u-rad > 0 else 0:u+rad if u+rad < 480 else 479,v-rad if v-rad>0 else 0:v+rad if v+rad< 640 else 639]
                     xyz,uv = depth2xyzuv(depth[u_,v_], u_, v_)
                     avrg_xyz = average_reads(xyz, cur_time)
 
@@ -183,8 +192,8 @@ def doloop(file):
                     if (counter >= OUTPUT):
                         print("\n")
                         #print("Image position values: (x: {}, y: {}, depth: {})".format(x, y, depth[u][v]))
-                        #print("Real world single point: (x: {}, y: {}, z: {})".format( point[0], point[1], point[2]))
-                        print("Average read data, X: {}, y: {}, Z: {}".format(avrg_xyz[1], avrg_xyz[2], avrg_xyz[3]))
+                        print("Real world single point: (x: {}, y: {}, z: {})".format( point[1], point[2], point[3]))
+                        print("Average read data, X: {}, y: {}, Z: {}, depth read: {}".format(avrg_xyz[1], avrg_xyz[2], avrg_xyz[3], depth[u,v]))
                         if (len(vel_buf)):
                             print('Velocity data, x: {}, y: {}, z: {}'.format(vel_buf[0][0], vel_buf[0][1], vel_buf[0][2]))
                         if (len(acc_buf)):
@@ -200,6 +209,7 @@ def doloop(file):
 
         #update depth data of ball
 
+        '''
         # loop over the set of tracked points
         for i in range(1, len(pts)):
             # if either of the tracked points are None, ignore
@@ -210,7 +220,9 @@ def doloop(file):
             # draw the connecting lines
             thickness = int(np.sqrt(buffer / float(i + 1)) * 2.5)
             cv2.line(frame, pts[i - 1], pts[i], (0, 0, 255), thickness)
-            
+        ''' 
+        cv2.circle(frame, (314, 239), 3, (255, 0, 0), -1)
+        cv2.circle(frame, (319, 239), 3, (255, 0, 0), -1)
 
         mask_3_channel = cv2.cvtColor(mask,cv2.COLOR_GRAY2RGB)
 
@@ -219,15 +231,13 @@ def doloop(file):
         da = np.hstack((d3,frame, mask_3_channel))
         
         if (first):
+            print(depth.shape)
             print(frame.shape)
             print(mask_3_channel.shape)
             first = False
 
         # Simple Downsample
-        #cv.ShowImage('both',np.array(da[::2,::2,::-1]))
-        #cv.WaitKey(5)
-        cv2.imshow('both',np.array(da[::2,::2,::-1]))
-        #cv2.waitKey(5)
+        cv2.imshow('both',np.array(da[:,:,::-1]))
         key = cv2.waitKey(5) & 0xFF
         # if the 'q' key is pressed, stop the loop
         if key == ord("q"):
