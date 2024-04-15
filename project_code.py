@@ -111,7 +111,7 @@ def get_avrg_dist_xyz(u, v, depths, cur_time):
 
     return ([cur_time, X,Y,Z])
 
-def doloop(file):
+def doloop(file, kalman):
     first = True
     RECORDING = False
     recording_time = 0
@@ -182,6 +182,10 @@ def doloop(file):
 
                     pos_buf.appendleft(avrg_xyz)
 
+                    measurement = [v, u, depth[u][v]]
+                    kalman.predict()
+                    kalman.update(measurement)
+
                     if (len(pos_buf) > 1 and len(pos_buf[1])):
                         #print('time0: {}, time1: {}'.format(pos_buf[0][0], pos_buf[1][0]))
                         x_vel = ((pos_buf[0][1] - pos_buf[1][1])/(pos_buf[0][0] - pos_buf[1][0]))*1e9
@@ -237,6 +241,7 @@ def doloop(file):
                 #draw the circle and center
                 cv2.circle(frame, (int(x), int(y)), int(radius),(0, 255, 255), 2)
                 cv2.circle(frame, center, 5, (0, 0, 255), -1)
+                cv2.circle(frame, (int(kalman.x[0]), int(kalman.x[2])), (66, 242, 245), 2)
 
         # update the points queue
         pts.appendleft(center)
@@ -289,5 +294,28 @@ def doloop(file):
 
 
 if __name__ == '__main__':
+    timestep = 0.033363
+
+    kalman = KalmanFilter (dim_x=6, dim_z=3)
+    #state transition matrix
+    kalman.F = np.array([[1.,0.,0.,1.,0.,0.],
+                        [0.,1.,0.,0.,1.,0.],
+                        [0.,0.,1.,0.,0.,1.],
+                        [0.,0.,0.,1.,0.,0.],
+                        [0.,0.,0.,0.,1.,0.],
+                        [0.,0.,0.,0.,0.,1.]])
+    #measurement matrix
+    kalman.H = np.array([[1.,0.,0.,0.,0.,0.],
+                        [0.,0.,1.,0.,0.,0.],
+                        [0.,0.,0.,0.,1.,0.]])
+    #uncertanty matrix
+    kalman.P *= 10
+    #measurement noise
+    kalman.R = np.eye(3)*5
+    #process nois
+    kalman.Q = Q_discrete_white_noise(dim=2, dt = timestep, var=0.1, block_size=3)
+    
+    kalman.x = np.array([0, 0, 0, 0, 0, 0])
+
     file = open(OUTPUT_FILE, "w")
-    doloop(file)
+    doloop(file, kalman)
